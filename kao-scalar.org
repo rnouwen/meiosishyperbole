@@ -1,0 +1,189 @@
+
+#+begin_src python :results output :session ricksess
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import math
+
+
+#states = list(range(0,102,2)) # use range(0,105,5) if you are in a rush
+states = list(range(0,105,5))
+size = len(states)
+
+def normpdf(x, mean=30, sd=10):
+    exp = np.exp(-0.5 * ((x - mean) / sd) ** 2)
+    pdf = (1 / (sd * np.sqrt(2 * np.pi)) * exp)
+    return pdf
+
+prior = list(map(normpdf,states))
+prior = prior/sum(prior)
+
+def derivedprior(state,evaluation_sd=1):
+    p= list(map(lambda s: normpdf(s, mean=affect(state),sd=evaluation_sd), states))
+    p=p/sum(p)
+    return(p)
+
+#def affect(state):
+#    return math.sqrt(state**2)
+
+def affect(state):
+     return state  # linear alignment
+#    return abs(30-state)+30  # alignment that entails higher the further you go away from normality (say temperature)
+ 
+
+def create_exactly_language(size, granularity=1):
+    # granularity means how far away the signal are from oneanother
+    language = np.row_stack((np.eye(size,size)[::granularity]))
+    return language
+
+language = create_exactly_language(size)
+
+def vecnormalize(a):
+    if sum(a)==0:
+        return(a)
+    else:
+        return(a/a.sum(axis=0))
+
+def rownormalize(a):
+    ar = []
+    for r in a:
+        som = sum(r)
+        ar.append(vecnormalize(r))
+    return(np.array(ar))
+
+def colnormalize(a):
+    return(rownormalize(a.T).T)
+
+
+
+#+end_src
+
+#+RESULTS:
+
+#+begin_src python :results file :session ricksess
+plt.clf() ## clear the plot !!!
+
+daffect = pd.DataFrame({"evaluation":list(map(affect,states)),"states":states})
+
+daffect.plot(x="states",y="evaluation")
+plt.savefig('evalfunc.png')
+'./evalfunc.png'
+
+#+end_src
+
+#+RESULTS:
+[[file:./evalfunc.png]]
+
+
+* Recap:
+
+So, there are two QUDs, one about states, the other about evaluation. Correspondingly, we have two modes of interpretation:
+
+- 1 :: state-based
+- 2 :: evaluation-based
+
+For each we have a literal listener.
+
+$$P_{lit-i}(s|m)=\dfrac{\tau(m,s)}{\sum_{s'}\tau(m,s')}$$
+
+$$P_e(d|s)\ \sim\  \mathcal{N}(\mu=s,\sigma)$$
+
+$$P_{lit-e}(d|m) = \dfrac{\sum_{s} P_{lit-i}(s|m)P_e(d|s)}{\sum_{d'}\sum_{s'} P_{lit-i}(s'|m)P_e(d'|s)}$$
+
+In practice this simplifies to:
+
+$$P_{lit-i}(s|m) = \tau(m,s)$$
+
+and, given that we only have exactly meanings:
+
+$$P_{lit-e}(d|m) = \dfrac{P_e(d|\iota s.\tau(m,s)=1)}{\sum_d' P_e(d'|\iota s.\tau(m,s)=1)}$$
+
+
+#+begin_src python :results output :session ricksess
+
+def speaker(state,evl,mode,alpha=4,evaluation_sd=10):
+    literal_listener_state = rownormalize(language*prior) # = language
+    literal_listener_eval = np.array(list(map(lambda s: derivedprior(s,evaluation_sd),states)))
+    dist = literal_listener_state[:,state] if mode==1 else literal_listener_eval[:,evl]
+    dist = np.exp(alpha*np.log(dist))
+    return vecnormalize(dist)
+
+#+end_src
+
+#+RESULTS:
+
+
+#+begin_src python :results output :session ricksess
+
+def simulate(alpha=10,evaluation_sd=10):
+    literal_listener_state = rownormalize(language*prior) # = language
+    literal_listener_eval = np.array(list(map(lambda s: derivedprior(s,evaluation_sd),states)))
+    all = np.empty([size,size,size])
+    for u in range(size):
+        for a in range(size):
+            for s in range(size):
+                all[u,a,s]=(prior[s]*derivedprior(states[s],evaluation_sd)[a]*speaker(s,a,1,alpha,evaluation_sd)[u])+(prior[s]*derivedprior(states[s],evaluation_sd)[a]*speaker(s,a,2,alpha,evaluation_sd)[u])
+    return(all)
+
+#+end_src
+
+#+RESULTS:
+
+Example:
+
+#+begin_src python :results output :session ricksess
+def ep(a):
+    return(sum(list(map(lambda s:prior[s]*derivedprior(states[s])[a],range(size)))))
+
+constructed_eval_prior = list(map(ep,range(size)))
+
+posterior = simulate()
+#+end_src
+
+#+RESULTS:
+: /tmp/babel-DxsTcS/python-FwyWTY:6: RuntimeWarning: divide by zero encountered in log
+:   dist = np.exp(alpha*np.log(dist))
+
+
+#+begin_src python :results file :session ricksess
+post_high = posterior[20] 
+post_low = posterior[8] 
+
+marginal_eval_high = vecnormalize(post_high.sum(axis=1))
+marginal_state_high = vecnormalize(post_high.sum(axis=0))
+marginal_eval_low = vecnormalize(post_low.sum(axis=1))
+marginal_state_low = vecnormalize(post_low.sum(axis=0))
+
+df_high= pd.DataFrame({"state_prior":prior,"eval_prior":constructed_eval_prior, "states":states,"posterior-eval":marginal_eval_high,"posterior-state":marginal_state_high})
+df_low= pd.DataFrame({"state_prior":prior,"eval_prior":constructed_eval_prior, "states":states,"posterior-eval":marginal_eval_low,"posterior-state":marginal_state_low})
+fig, (ax1, ax2) = plt.subplots(1, 2,figsize=(12,2))
+df_high.plot(x="states",y=["state_prior","eval_prior","posterior-eval","posterior-state"],ax=ax1)
+df_low.plot(x="states",y=["state_prior","eval_prior","posterior-eval","posterior-state"],ax=ax2)
+plt.savefig('posteriorsb.png')
+'./posteriorsb.png'
+
+#+end_src
+
+
+#+attr_org: :width 80% 
+#+RESULTS:
+[[file:./posteriorsb.png]]
+
+#+begin_src python :results output :session ricksess
+df_high["m"] = 100
+df_low["m"] = 40
+dfdf = pd.concat([df_high,df_low])
+print(dfdf.head())
+dfdf.to_csv("./PATH/GOES/HERE.csv")
+
+#+end_src
+
+#+RESULTS:
+:    state_prior  eval_prior  states  posterior-eval  posterior-state    m
+: 0     0.000887    0.000951       0    1.354599e-29     3.364680e-17  100
+: 1     0.001585    0.001643       2    9.811013e-29     3.004741e-16  100
+: 2     0.002719    0.002787       4    6.827240e-_low     2.541052e-15  100
+: 3     0.004483    0.004575       6    4.564620e-27     2.030760e-14  100
+: 4     0.007102    0.007219       8    2.932192e-26     1.530306e-13  100
+
